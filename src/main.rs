@@ -528,7 +528,7 @@ fn main() {
     let n = 10000;
     println!("Creating {} boards", n);
     let mut boards1 = vec![Board::new(); n];
-    // let mut boards2 = boards1.clone();
+    let mut boards2 = boards1.clone();
     println!("Created {} boards", n);
 
     // time
@@ -540,206 +540,18 @@ fn main() {
     let end = std::time::Instant::now();
     let time1 = end - begin;
 
-    // let begin = std::time::Instant::now();
-    // let mut steps2 = 0;
-    // for board in &mut boards2 {
-    //     steps2 += value_iteration(board);
-    // }
-    // let end = std::time::Instant::now();
-    // let time2 = end - begin;
+    let begin = std::time::Instant::now();
+    let mut steps2 = 0;
+    for board in &mut boards2 {
+        steps2 += value_iteration(board);
+    }
+    let end = std::time::Instant::now();
+    let time2 = end - begin;
 
     println!("Heuristic: {} steps in {:?}", steps1 / n, time1 / n as u32);
-    // println!(
-    //     "Value iteration: {} steps in {:?}",
-    //     steps2 / n,
-    //     time2 / n as u32
-    // );
+    println!(
+        "Value iteration: {} steps in {:?}",
+        steps2 / n,
+        time2 / n as u32
+    );
 }
-
-// fn main() {
-//     // run 100 boards with heuristic, plot both steps and time
-//     use plotters::prelude::*;
-
-//     let n = 1000;
-//     let mut boards = vec![Board::new(); n];
-
-//     let mut steps = Vec::new();
-//     let mut times = Vec::new();
-
-//     for board in &mut boards {
-//         let begin = std::time::Instant::now();
-//         steps.push(heuristic(board));
-//         let end = std::time::Instant::now();
-//         times.push(end - begin);
-//     }
-//     println!("done!");
-
-//     let times: Vec<f64> = times
-//         .into_iter()
-//         .map(|d| d.as_micros() as f64)
-//         .map(|t| t / 1000.0)
-//         .collect();
-
-//     // plot steps on x axis, time on y axis
-//     let root = BitMapBackend::new("heuristic.png", (1024, 768)).into_drawing_area();
-//     root.fill(&WHITE).unwrap();
-
-//     let areas = root.split_by_breakpoints([944], [80]);
-
-//     let x_range = *steps.iter().min().unwrap()..*steps.iter().max().unwrap();
-
-//     let times_u64: Vec<_> = times.iter().map(|t| *t as u64).collect();
-//     let y_range =
-//         (*times_u64.iter().min().unwrap() as f64)..(*times_u64.iter().max().unwrap() as f64);
-
-//     let mut x_hist_ctx = ChartBuilder::on(&areas[0])
-//         .y_label_area_size(40)
-//         .build_cartesian_2d(
-//             (*steps.iter().min().unwrap() as f64..*steps.iter().max().unwrap() as f64)
-//                 .step(1000.0)
-//                 .use_round()
-//                 .into_segmented(),
-//             0..50,
-//         )
-//         .unwrap();
-
-//     let mut y_hist_ctx = ChartBuilder::on(&areas[3])
-//         .x_label_area_size(40)
-//         .build_cartesian_2d(0..100, y_range.clone().step(1.0).use_round())
-//         .unwrap();
-
-//     let mut scatter_ctx = ChartBuilder::on(&areas[2])
-//         .x_label_area_size(40)
-//         .y_label_area_size(40)
-//         .build_cartesian_2d(x_range, y_range)
-//         .unwrap();
-
-//     scatter_ctx
-//         .configure_mesh()
-//         // .disable_x_mesh()
-//         // .disable_y_mesh()
-//         .draw()
-//         .unwrap();
-
-//     let points = steps.into_iter().zip(times).collect::<Vec<_>>();
-
-//     scatter_ctx
-//         .draw_series(
-//             points
-//                 .iter()
-//                 .map(|(x, y)| Circle::new((*x, *y), 3.0, GREEN.filled())),
-//         )
-//         .unwrap();
-
-//     let x_hist = Histogram::vertical(&x_hist_ctx)
-//         .style(GREEN.filled())
-//         .margin(0)
-//         .data(points.iter().map(|(x, _)| (*x as f64, 1)));
-
-//     let y_hist = Histogram::horizontal(&y_hist_ctx)
-//         .style(GREEN.filled())
-//         .margin(0)
-//         .data(points.iter().map(|(_, y)| (*y, 1)));
-
-//     x_hist_ctx.draw_series(x_hist).unwrap();
-//     y_hist_ctx.draw_series(y_hist).unwrap();
-
-//     root.present().unwrap();
-// }
-
-// fn main() {
-//     // run 100 boards with heuristic, plot both steps and time
-//     use plotters::prelude::*;
-
-//     let n = 100;
-//     let mut boards = Vec::with_capacity(n);
-
-//     for i in 0..n {
-//         boards.push(Board::new());
-//     }
-
-//     let mut steps = Vec::new();
-//     let mut times = Vec::new();
-
-//     for (i, board) in boards.iter_mut().enumerate() {
-//         println!("{i}");
-
-//         let begin = std::time::Instant::now();
-//         steps.push(value_iteration(board));
-//         let end = std::time::Instant::now();
-//         times.push(end - begin);
-//     }
-//     println!("done! {steps:?}");
-
-//     let times: Vec<f64> = times
-//         .into_iter()
-//         .map(|d| d.as_micros() as f64)
-//         .map(|t| t / 1000.0)
-//         .collect();
-
-//     // plot steps on x axis, time on y axis
-//     let root = BitMapBackend::new("heuristic.png", (1024, 768)).into_drawing_area();
-//     root.fill(&WHITE).unwrap();
-
-//     let areas = root.split_by_breakpoints([944], [80]);
-
-//     let x_range = *steps.iter().min().unwrap()..*steps.iter().max().unwrap();
-
-//     let times_u64: Vec<_> = times.iter().map(|t| *t as u64).collect();
-//     let y_range =
-//         (*times_u64.iter().min().unwrap() as f64)..(*times_u64.iter().max().unwrap() as f64);
-
-//     let mut x_hist_ctx = ChartBuilder::on(&areas[0])
-//         .y_label_area_size(40)
-//         .build_cartesian_2d(
-//             (*steps.iter().min().unwrap() as f64..*steps.iter().max().unwrap() as f64)
-//                 .step(2.0)
-//                 .use_round()
-//                 .into_segmented(),
-//             0..30,
-//         )
-//         .unwrap();
-
-//     let mut y_hist_ctx = ChartBuilder::on(&areas[3])
-//         .x_label_area_size(40)
-//         .build_cartesian_2d(0..10, y_range.clone().step(100.0).use_round())
-//         .unwrap();
-
-//     let mut scatter_ctx = ChartBuilder::on(&areas[2])
-//         .x_label_area_size(40)
-//         .y_label_area_size(40)
-//         .build_cartesian_2d(x_range, y_range)
-//         .unwrap();
-
-//     scatter_ctx
-//         .configure_mesh()
-//         // .disable_x_mesh()
-//         // .disable_y_mesh()
-//         .draw()
-//         .unwrap();
-
-//     let points = steps.into_iter().zip(times).collect::<Vec<_>>();
-
-//     scatter_ctx
-//         .draw_series(
-//             points
-//                 .iter()
-//                 .map(|(x, y)| Circle::new((*x, *y), 3.0, GREEN.filled())),
-//         )
-//         .unwrap();
-
-//     let x_hist = Histogram::vertical(&x_hist_ctx)
-//         .style(GREEN.filled())
-//         .margin(0)
-//         .data(points.iter().map(|(x, _)| (*x as f64, 1)));
-
-//     let y_hist = Histogram::horizontal(&y_hist_ctx)
-//         .style(GREEN.filled())
-//         .margin(0)
-//         .data(points.iter().map(|(_, y)| (*y, 1)));
-
-//     x_hist_ctx.draw_series(x_hist).unwrap();
-//     y_hist_ctx.draw_series(y_hist).unwrap();
-
-//     root.present().unwrap();
-// }
