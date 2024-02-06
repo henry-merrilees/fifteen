@@ -1,4 +1,7 @@
+use anyhow::Context;
+use itertools::Itertools;
 use rand::seq::SliceRandom;
+use std::collections::HashMap;
 
 // Some nice helper functions
 
@@ -16,7 +19,7 @@ fn distance(a: i8, b: i8) -> i8 {
     taxicab_norm(a, b)
 }
 
-#[derive(PartialEq, Debug, Copy, Clone)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
 enum Move {
     Up,
     Down,
@@ -34,6 +37,40 @@ impl Move {
             _ => None,
         }
     }
+
+    fn index_update(&self, index: i8) -> Option<i8> {
+        let (x, y) = coords(index);
+        match self {
+            Move::Up => {
+                if y == 0 {
+                    None
+                } else {
+                    Some((y - 1) * 4 + x)
+                }
+            }
+            Move::Down => {
+                if y == 3 {
+                    None
+                } else {
+                    Some((y + 1) * 4 + x)
+                }
+            }
+            Move::Left => {
+                if x == 0 {
+                    None
+                } else {
+                    Some(y * 4 + (x - 1))
+                }
+            }
+            Move::Right => {
+                if x == 3 {
+                    None
+                } else {
+                    Some(y * 4 + (x + 1))
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -44,39 +81,11 @@ struct Board {
 impl Board {
     fn new() -> Board {
         // permute 0..=15 (15 is the blank)
-        let mut rng = rand::thread_rng();
-        let mut order = std::array::from_fn::<i8, 16, _>(|i| i as i8);
-        order.shuffle(&mut rng);
+        let order = std::array::from_fn::<i8, 16, _>(|i| i as i8);
+        let mut board = Board { order };
 
-        let blank_row = order.iter().position(|&p| p == 15).unwrap() as i8 / 4;
-        let blank_row_parity = (blank_row + 1) % 2;
-
-        let mut inversions = 0;
-
-        for i in 0..15 {
-            for j in (i + 1)..16 {
-                let first = order[i];
-                let second = order[j];
-                if (first > second) && (first != 15 && second != 15) {
-                    inversions += 1;
-                }
-            }
-        }
-        let inversion_parity = inversions % 2;
-
-        if inversion_parity ^ blank_row_parity == 1 {
-            // find two non-blank pieces and swap them
-            println!("Swapping");
-            let mut i = 0;
-            let mut j = 1;
-            while order[i] == 15 || order[j] == 15 {
-                i += 1;
-                j += 1;
-            }
-            println!("Swapping {} and {}", i, j);
-        }
-
-        Board { order }
+        board.shuffle(1000000); // This should be good enough, right??
+        board
     }
 
     fn piece_location(&self, piece: i8) -> i8 {
@@ -121,23 +130,6 @@ impl Board {
             .sum()
     }
 
-    fn score_diff(&self, r#move: Move) -> i8 {
-        // assumes move in bounds
-        let blank = self.order[15];
-
-        let new_blank = blank
-            - match r#move {
-                Move::Up => 4,
-                Move::Down => -4,
-                Move::Left => 1,
-                Move::Right => -1,
-            } % 16;
-
-        let piece = self.order.iter().position(|p| *p == new_blank).unwrap() as i8;
-
-        distance(blank, piece) - distance(new_blank, piece)
-    }
-
     fn correct(&self) -> i8 {
         self.order
             .iter()
@@ -150,6 +142,20 @@ impl Board {
         self.correct() == 16
     }
 
+    // count how many contiguous pieces are in the correct position from 0
+    fn solved_in_order_from_zero(&self) -> usize {
+        let mut correct = 0;
+        for (i, &piece) in self.order.iter().enumerate() {
+            if i as i8 == piece {
+                correct += 1;
+            } else {
+                break;
+            }
+        }
+        correct
+    }
+
+    #[allow(dead_code)]
     fn print(&self) {
         for y in 0..4 {
             for x in 0..4 {
@@ -172,46 +178,274 @@ impl Board {
             return;
         }
 
-        let new_blank = blank
-            - match r#move {
-                Move::Up => 4,
-                Move::Down => -4, // -4 % 16
-                Move::Left => 1,
-                Move::Right => -1, // -1 % 16
-            } % 16;
+        if let Some(new_blank) = Move::index_update(&r#move, blank) {
+            self.order.swap(new_blank as usize, blank as usize);
+        } else {
+            panic!("Invalid move");
+        }
+    }
 
-        self.order.swap(new_blank as usize, blank as usize);
+    fn shuffle(&mut self, n: usize) {
+        let mut rng = rand::thread_rng();
+        for _ in 0..n {
+            let valid_moves = self.valid_moves();
+            let r#move = valid_moves.choose(&mut rng).unwrap();
+            self.execute_move(r#move.clone());
+        }
     }
 }
 
-fn main() {
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+struct SubProblem {
+    restricted: usize, // encoding pieces 0..restricted
+    goal: usize,       // encoding pieces restricted..(restricted + goal)
+}
+
+impl SubProblem {
+    fn relax(&mut self) {
+        self.restricted = self
+            .restricted
+            .checked_sub(1)
+            .expect("already maximally unrestricted.");
+        self.goal += 1;
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+enum Piece {
+    Restricted(i8),
+    Goal(i8),
+    Blank,
+    Ignored,
+}
+
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+struct SubState {
+    board: Vec<Piece>, // length 16 None for don't cares or already solved
+}
+
+impl SubState {
+    fn blank_index(&self) -> i8 {
+        self.board
+            .iter()
+            .position(|p| matches!(p, Piece::Blank))
+            .unwrap() as i8
+    }
+
+    fn next_state(&self, action: Move) -> Self {
+        let blank_index = self.blank_index();
+        let new_blank_index = action.index_update(blank_index).unwrap();
+
+        let mut piece_locations = self.board.clone();
+        piece_locations.swap(blank_index as usize, new_blank_index as usize);
+
+        Self {
+            board: piece_locations,
+        }
+    }
+
+    fn valid_moves(&self) -> Vec<Move> {
+        use Move::*;
+        [Up, Down, Left, Right]
+            .into_iter()
+            .filter(|r#move| {
+                let new_blank = r#move.index_update(self.blank_index());
+                new_blank.is_some_and(|new_blank| {
+                    // check if the new blank does not displace a restricted piece
+                    !matches!(self.board[new_blank as usize], Piece::Restricted(_))
+                })
+            })
+            .collect()
+    }
+    fn from_board(subproblem: SubProblem, board: &Board) -> Self {
+        let r = subproblem.restricted;
+        let g = subproblem.goal;
+
+        Self {
+            board: board
+                .order
+                .iter()
+                .enumerate()
+                .map(|(i, &p)| {
+                    if i < r {
+                        assert!(i as i8 == p);
+                        Piece::Restricted(p)
+                    } else if (p as usize) < (r + g) {
+                        Piece::Goal(p)
+                    } else if p == 15 {
+                        Piece::Blank
+                    } else {
+                        Piece::Ignored
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    fn solved(&self) -> bool {
+        self.board.iter().enumerate().all(|(i, p)| match p {
+            Piece::Goal(n) | Piece::Restricted(n) => i as i8 == *n,
+            _ => true,
+        })
+    }
+}
+
+type ValueFunction = HashMap<SubState, f64>;
+
+impl SubProblem {
+    fn gen_states(&self) -> ValueFunction {
+        // produce every distinguishable ordering of the restricted pieces
+        let mut states = ValueFunction::new();
+
+        for mut permutation in (self.restricted..16)
+            .permutations(self.goal + 1) // distribute the goal pieces and the blank
+            .map(Vec::into_iter)
+        {
+            let blank_index = permutation.next().unwrap();
+            let goal_indicies = permutation.collect::<Vec<_>>();
+            let pieces = (self.restricted..(self.restricted + self.goal))
+                .map(|n| Piece::Goal(n as i8))
+                .collect::<Vec<_>>();
+
+            // enter restricted pieces
+            let mut piece_locations = (0..self.restricted)
+                .map(|n| Piece::Restricted(n as i8))
+                .collect::<Vec<_>>();
+
+            // fill rest with ignored
+            piece_locations.resize(16, Piece::Ignored);
+
+            for (index, piece) in goal_indicies.iter().zip(pieces) {
+                piece_locations[*index] = piece;
+            }
+
+            // assign blank
+            piece_locations[blank_index] = Piece::Blank;
+
+            states.insert(
+                SubState {
+                    board: piece_locations,
+                },
+                0.0,
+            );
+        }
+        states
+    }
+    fn reward(&self, substate: SubState) -> f64 {
+        for (index, piece) in substate.board.iter().enumerate() {
+            match piece {
+                Piece::Goal(n) => {
+                    if index as i8 != *n {
+                        return 0.0;
+                    }
+                }
+                Piece::Restricted(n) => {
+                    if index as i8 != *n {
+                        unreachable!("Restricted piece not in correct location");
+                    }
+                }
+                _ => {}
+            }
+        }
+        1.0
+    }
+
+    fn value_iteration(self: SubProblem) -> ValueFunction {
+        let gamma = 0.8; // TODO
+        let mut value_function = self.gen_states();
+
+        loop {
+            let mut cumulative_value_delta = 0.0;
+
+            let value_function_last = value_function.clone();
+            for (state, value) in value_function.iter_mut() {
+                let moves = state.valid_moves();
+
+                let moves_and_values = moves.into_iter().map(|m| {
+                    let newstate = state.next_state(m.clone());
+                    (
+                        m,
+                        value_function_last
+                            .get(&newstate)
+                            .with_context(|| format!("State not in value function: {:?}", newstate))
+                            .unwrap(),
+                    )
+                });
+
+                // TODO check
+                let best_move_value = moves_and_values
+                    .fold((None, f64::MIN), |(best_move, best_value), (m, v)| {
+                        if *v > best_value {
+                            (Some(m), *v)
+                        } else {
+                            (best_move, best_value)
+                        }
+                    })
+                    .1;
+
+                let new_value = self.reward(state.clone()) + gamma * best_move_value;
+                cumulative_value_delta += new_value - *value;
+                *value = new_value;
+            }
+
+            //println!("Cumulative value delta: {}", cumulative_value_delta);
+            let threshold = 0.0001; // TODO set threshold
+            if cumulative_value_delta < threshold {
+                // TODO set threshold
+                //println!("Converged to within cumulative value delta {}", threshold);
+                break;
+            }
+        }
+        value_function
+    }
+}
+
+fn policy(value_function: &ValueFunction, state: &SubState) -> Move {
+    let moves = state.valid_moves();
+
+    let moves_and_values = moves.into_iter().map(|m| {
+        let newstate = state.next_state(m.clone());
+        (
+            m,
+            value_function
+                .get(&newstate)
+                .expect("State not in value function"),
+        )
+    });
+
+    // TODO check
+    moves_and_values
+        .fold((None, f64::MIN), |(best_move, best_value), (m, v)| {
+            if *v > best_value {
+                (Some(m), *v)
+            } else {
+                (best_move, best_value)
+            }
+        })
+        .0
+        .unwrap()
+}
+
+fn heuristic(board: &mut Board) -> usize {
     // get input char, convert to move, execute move, print board
-
-    let mut board = Board::new();
-
-    let term = console::Term::stdout();
 
     let mut seen = std::collections::HashSet::<Board>::new();
 
-    let mut i = 0;
+    let mut steps = 0;
 
     loop {
-        i += 1;
-        // board.print();
-        // term.clear_last_lines(4).unwrap();
-
         if board.solved() {
-            println!("Solved in {} moves", i);
             break;
         }
+        steps += 1;
 
         let valid_moves = board.valid_moves();
 
         if let Some((best_move, _score, new_board)) = valid_moves
             .iter()
             .filter_map(|r#move| {
-                let mut new_board = board.clone();
-                new_board.execute_move(*r#move);
+                let mut new_board = *board; // .clone()??
+                new_board.execute_move(r#move.clone());
                 if seen.contains(&new_board) {
                     None
                 } else {
@@ -220,14 +454,292 @@ fn main() {
             })
             .min_by_key(|(_, score, _)| *score)
         {
-            // println!("Move: {:?}", best_move);
-            board.execute_move(*best_move);
+            board.execute_move(best_move.clone());
             seen.insert(new_board);
         } else {
             // pick random
             let random_move = valid_moves.choose(&mut rand::thread_rng()).unwrap();
-            // println!("Rand: {:?}", random_move);
-            board.execute_move(*random_move);
+            board.execute_move(random_move.clone());
         }
     }
+    steps
 }
+
+fn value_iteration(board: &mut Board) -> usize {
+    let min_goal = 2;
+    let mut steps = 0;
+
+    let mut r = 0;
+    while r < 15 {
+        r = board.solved_in_order_from_zero();
+        let g = usize::min(min_goal, 15 - r);
+        let mut subproblem = SubProblem {
+            restricted: r,
+            goal: g,
+        };
+
+        let mut value_function = subproblem.value_iteration();
+        let mut substate = SubState::from_board(subproblem, board);
+
+        while *value_function
+            .get(&substate)
+            .with_context(|| {
+                format!(
+                    "State not in value function: {:?}... value function: {:?}",
+                    substate,
+                    value_function.keys().count()
+                )
+            })
+            .unwrap()
+            <= 0.01
+        // should be good enough to mitigate floating point errors
+        {
+            subproblem.relax();
+            substate = SubState::from_board(subproblem, board);
+            value_function = subproblem.value_iteration();
+        }
+
+        //board.print();
+        loop {
+            if substate.solved() {
+                //println!("Solved subproblem {:?}", subproblem);
+                break;
+            }
+
+            let action = policy(&value_function, &substate);
+            steps += 1;
+            //println!("{}: {:?}", steps, action);
+            board.execute_move(action.clone());
+            substate = substate.next_state(action);
+        }
+        r += 1;
+
+        if board.solved() {
+            break;
+        }
+    }
+    //board.print();
+
+    //println!("Solved in {} steps", steps);
+    steps
+}
+
+fn main() {
+    let n = 10000;
+    println!("Creating {} boards", n);
+    let mut boards1 = vec![Board::new(); n];
+    // let mut boards2 = boards1.clone();
+    println!("Created {} boards", n);
+
+    // time
+    let begin = std::time::Instant::now();
+    let mut steps1 = 0;
+    for board in &mut boards1 {
+        steps1 += heuristic(board);
+    }
+    let end = std::time::Instant::now();
+    let time1 = end - begin;
+
+    // let begin = std::time::Instant::now();
+    // let mut steps2 = 0;
+    // for board in &mut boards2 {
+    //     steps2 += value_iteration(board);
+    // }
+    // let end = std::time::Instant::now();
+    // let time2 = end - begin;
+
+    println!("Heuristic: {} steps in {:?}", steps1 / n, time1 / n as u32);
+    // println!(
+    //     "Value iteration: {} steps in {:?}",
+    //     steps2 / n,
+    //     time2 / n as u32
+    // );
+}
+
+// fn main() {
+//     // run 100 boards with heuristic, plot both steps and time
+//     use plotters::prelude::*;
+
+//     let n = 1000;
+//     let mut boards = vec![Board::new(); n];
+
+//     let mut steps = Vec::new();
+//     let mut times = Vec::new();
+
+//     for board in &mut boards {
+//         let begin = std::time::Instant::now();
+//         steps.push(heuristic(board));
+//         let end = std::time::Instant::now();
+//         times.push(end - begin);
+//     }
+//     println!("done!");
+
+//     let times: Vec<f64> = times
+//         .into_iter()
+//         .map(|d| d.as_micros() as f64)
+//         .map(|t| t / 1000.0)
+//         .collect();
+
+//     // plot steps on x axis, time on y axis
+//     let root = BitMapBackend::new("heuristic.png", (1024, 768)).into_drawing_area();
+//     root.fill(&WHITE).unwrap();
+
+//     let areas = root.split_by_breakpoints([944], [80]);
+
+//     let x_range = *steps.iter().min().unwrap()..*steps.iter().max().unwrap();
+
+//     let times_u64: Vec<_> = times.iter().map(|t| *t as u64).collect();
+//     let y_range =
+//         (*times_u64.iter().min().unwrap() as f64)..(*times_u64.iter().max().unwrap() as f64);
+
+//     let mut x_hist_ctx = ChartBuilder::on(&areas[0])
+//         .y_label_area_size(40)
+//         .build_cartesian_2d(
+//             (*steps.iter().min().unwrap() as f64..*steps.iter().max().unwrap() as f64)
+//                 .step(1000.0)
+//                 .use_round()
+//                 .into_segmented(),
+//             0..50,
+//         )
+//         .unwrap();
+
+//     let mut y_hist_ctx = ChartBuilder::on(&areas[3])
+//         .x_label_area_size(40)
+//         .build_cartesian_2d(0..100, y_range.clone().step(1.0).use_round())
+//         .unwrap();
+
+//     let mut scatter_ctx = ChartBuilder::on(&areas[2])
+//         .x_label_area_size(40)
+//         .y_label_area_size(40)
+//         .build_cartesian_2d(x_range, y_range)
+//         .unwrap();
+
+//     scatter_ctx
+//         .configure_mesh()
+//         // .disable_x_mesh()
+//         // .disable_y_mesh()
+//         .draw()
+//         .unwrap();
+
+//     let points = steps.into_iter().zip(times).collect::<Vec<_>>();
+
+//     scatter_ctx
+//         .draw_series(
+//             points
+//                 .iter()
+//                 .map(|(x, y)| Circle::new((*x, *y), 3.0, GREEN.filled())),
+//         )
+//         .unwrap();
+
+//     let x_hist = Histogram::vertical(&x_hist_ctx)
+//         .style(GREEN.filled())
+//         .margin(0)
+//         .data(points.iter().map(|(x, _)| (*x as f64, 1)));
+
+//     let y_hist = Histogram::horizontal(&y_hist_ctx)
+//         .style(GREEN.filled())
+//         .margin(0)
+//         .data(points.iter().map(|(_, y)| (*y, 1)));
+
+//     x_hist_ctx.draw_series(x_hist).unwrap();
+//     y_hist_ctx.draw_series(y_hist).unwrap();
+
+//     root.present().unwrap();
+// }
+
+// fn main() {
+//     // run 100 boards with heuristic, plot both steps and time
+//     use plotters::prelude::*;
+
+//     let n = 100;
+//     let mut boards = Vec::with_capacity(n);
+
+//     for i in 0..n {
+//         boards.push(Board::new());
+//     }
+
+//     let mut steps = Vec::new();
+//     let mut times = Vec::new();
+
+//     for (i, board) in boards.iter_mut().enumerate() {
+//         println!("{i}");
+
+//         let begin = std::time::Instant::now();
+//         steps.push(value_iteration(board));
+//         let end = std::time::Instant::now();
+//         times.push(end - begin);
+//     }
+//     println!("done! {steps:?}");
+
+//     let times: Vec<f64> = times
+//         .into_iter()
+//         .map(|d| d.as_micros() as f64)
+//         .map(|t| t / 1000.0)
+//         .collect();
+
+//     // plot steps on x axis, time on y axis
+//     let root = BitMapBackend::new("heuristic.png", (1024, 768)).into_drawing_area();
+//     root.fill(&WHITE).unwrap();
+
+//     let areas = root.split_by_breakpoints([944], [80]);
+
+//     let x_range = *steps.iter().min().unwrap()..*steps.iter().max().unwrap();
+
+//     let times_u64: Vec<_> = times.iter().map(|t| *t as u64).collect();
+//     let y_range =
+//         (*times_u64.iter().min().unwrap() as f64)..(*times_u64.iter().max().unwrap() as f64);
+
+//     let mut x_hist_ctx = ChartBuilder::on(&areas[0])
+//         .y_label_area_size(40)
+//         .build_cartesian_2d(
+//             (*steps.iter().min().unwrap() as f64..*steps.iter().max().unwrap() as f64)
+//                 .step(2.0)
+//                 .use_round()
+//                 .into_segmented(),
+//             0..30,
+//         )
+//         .unwrap();
+
+//     let mut y_hist_ctx = ChartBuilder::on(&areas[3])
+//         .x_label_area_size(40)
+//         .build_cartesian_2d(0..10, y_range.clone().step(100.0).use_round())
+//         .unwrap();
+
+//     let mut scatter_ctx = ChartBuilder::on(&areas[2])
+//         .x_label_area_size(40)
+//         .y_label_area_size(40)
+//         .build_cartesian_2d(x_range, y_range)
+//         .unwrap();
+
+//     scatter_ctx
+//         .configure_mesh()
+//         // .disable_x_mesh()
+//         // .disable_y_mesh()
+//         .draw()
+//         .unwrap();
+
+//     let points = steps.into_iter().zip(times).collect::<Vec<_>>();
+
+//     scatter_ctx
+//         .draw_series(
+//             points
+//                 .iter()
+//                 .map(|(x, y)| Circle::new((*x, *y), 3.0, GREEN.filled())),
+//         )
+//         .unwrap();
+
+//     let x_hist = Histogram::vertical(&x_hist_ctx)
+//         .style(GREEN.filled())
+//         .margin(0)
+//         .data(points.iter().map(|(x, _)| (*x as f64, 1)));
+
+//     let y_hist = Histogram::horizontal(&y_hist_ctx)
+//         .style(GREEN.filled())
+//         .margin(0)
+//         .data(points.iter().map(|(_, y)| (*y, 1)));
+
+//     x_hist_ctx.draw_series(x_hist).unwrap();
+//     y_hist_ctx.draw_series(y_hist).unwrap();
+
+//     root.present().unwrap();
+// }
