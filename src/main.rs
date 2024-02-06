@@ -169,6 +169,7 @@ impl Board {
             }
             println!();
         }
+        println!();
     }
 
     fn execute_move(&mut self, r#move: Move) {
@@ -437,6 +438,7 @@ fn heuristic(board: &mut Board) -> usize {
         if board.solved() {
             break;
         }
+        //board.print();
         steps += 1;
 
         let valid_moves = board.valid_moves();
@@ -499,14 +501,15 @@ fn value_iteration(board: &mut Board) -> usize {
             value_function = subproblem.value_iteration();
         }
 
-        //board.print();
         loop {
+            board.print();
             if substate.solved() {
-                //println!("Solved subproblem {:?}", subproblem);
+                println!("Solved {:?}", subproblem);
                 break;
             }
 
             let action = policy(&value_function, &substate);
+            println!("Move: {:?}", action);
             steps += 1;
             //println!("{}: {:?}", steps, action);
             board.execute_move(action.clone());
@@ -515,6 +518,7 @@ fn value_iteration(board: &mut Board) -> usize {
         r += 1;
 
         if board.solved() {
+            println!("Solved in {} steps", steps);
             break;
         }
     }
@@ -525,7 +529,7 @@ fn value_iteration(board: &mut Board) -> usize {
 }
 
 fn main() {
-    let n = 10000;
+    let n = 10;
     println!("Creating {} boards", n);
     let mut boards1 = vec![Board::new(); n];
     let mut boards2 = boards1.clone();
@@ -533,6 +537,10 @@ fn main() {
 
     // time
     let begin = std::time::Instant::now();
+    println!(
+        "Running {} heuristic steps, would print but takes way too long.",
+        n
+    );
     let mut steps1 = 0;
     for board in &mut boards1 {
         steps1 += heuristic(board);
@@ -548,9 +556,13 @@ fn main() {
     let end = std::time::Instant::now();
     let time2 = end - begin;
 
-    println!("Heuristic: {} steps in {:?}", steps1 / n, time1 / n as u32);
     println!(
-        "Value iteration: {} steps in {:?}",
+        "Heuristic: avg {} steps in {:?}",
+        steps1 / n,
+        time1 / n as u32
+    );
+    println!(
+        "Value iteration: avg {} steps in {:?}",
         steps2 / n,
         time2 / n as u32
     );
